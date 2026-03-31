@@ -98,7 +98,8 @@ function createPurrAudio() {
 export default function SleepCompanionNew() {
   const [lineIndex, setLineIndex] = useState(0);
   const [isPurring, setIsPurring] = useState(false);
-  const [volume, setVolume] = useState(0.07);
+  const [volume, setVolume] = useState(0.1);
+  const [audioHint, setAudioHint] = useState('Tap the button to start purring.');
   const audioRef = useRef(null);
 
   useEffect(() => {
@@ -121,19 +122,30 @@ export default function SleepCompanionNew() {
   }, []);
 
   const startPurr = async () => {
-    setIsPurring(true);
-    await audioRef.current?.start(volume);
+    try {
+      await audioRef.current?.start(volume);
+      setIsPurring(true);
+      setAudioHint('Purring is on. Tap again to stop.');
+    } catch {
+      setAudioHint('Your browser blocked audio. Tap again to allow sound.');
+    }
   };
 
   const stopPurr = () => {
     setIsPurring(false);
     audioRef.current?.stop();
+    setAudioHint('Purring stopped. Tap to start again.');
+  };
+
+  const togglePurr = () => {
+    if (isPurring) stopPurr();
+    else startPurr();
   };
 
   return (
     <main className="scn-shell">
       <section className="scn-card">
-        <div className="scn-cat-wrap" onMouseDown={startPurr} onMouseUp={stopPurr} onMouseLeave={stopPurr}>
+        <button type="button" className="scn-cat-wrap" onClick={togglePurr} aria-label="Toggle soothing purr">
           <div className={`scn-cat ${isPurring ? 'is-purring' : ''}`} aria-hidden="true">
             <div className="scn-ear scn-ear-left" />
             <div className="scn-ear scn-ear-right" />
@@ -143,14 +155,15 @@ export default function SleepCompanionNew() {
               <span className="scn-nose" />
             </div>
           </div>
-        </div>
+        </button>
 
         <h1>Sleep Companion</h1>
         <p className="scn-line">{CALM_LINES[lineIndex]}</p>
 
-        <button type="button" className="scn-btn" onMouseDown={startPurr} onMouseUp={stopPurr} onMouseLeave={stopPurr}>
-          {isPurring ? 'purring softly… release to stop' : 'hold to start soothing purr'}
+        <button type="button" className="scn-btn" onClick={togglePurr}>
+          {isPurring ? 'stop soothing purr' : 'start soothing purr'}
         </button>
+        <p className="scn-hint">{audioHint}</p>
 
         <label className="scn-volume" htmlFor="purr-range">
           <span>Soothing purr volume</span>
@@ -158,7 +171,7 @@ export default function SleepCompanionNew() {
             id="purr-range"
             type="range"
             min="0.02"
-            max="0.16"
+            max="0.2"
             step="0.01"
             value={volume}
             onChange={(event) => setVolume(Number(event.target.value))}
@@ -168,4 +181,3 @@ export default function SleepCompanionNew() {
     </main>
   );
 }
-
