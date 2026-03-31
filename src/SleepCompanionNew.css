@@ -22,7 +22,11 @@
 .scn-cat-wrap {
   display: grid;
   place-items: center;
-  margin-bottom: 14px;
+  margin: 0 auto 14px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
 }
 
 .scn-cat {
@@ -109,3 +113,11 @@
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.03); }
 }
+
+.scn-hint {
+  color: #bda37f;
+  font-size: 13px;
+  min-height: 20px;
+  margin: 8px 0 0;
+}
+
