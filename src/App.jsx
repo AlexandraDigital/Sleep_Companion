@@ -1,3 +1,4 @@
+import React from 'react';
 import SleepCompanion from './SleepCompanion';
 
 export default function App() {
