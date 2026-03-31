@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './SleepCompanion.css';
 
 const DUST = Array.from({ length: 18 }, (_, i) => ({
