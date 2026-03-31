@@ -1,6 +1,6 @@
 import React from 'react';
-import SleepCompanion from './SleepCompanion';
+import SleepCompanionNew from './SleepCompanionNew';
 
 export default function App() {
-  return <SleepCompanion />;
+  return <SleepCompanionNew />;
 }
