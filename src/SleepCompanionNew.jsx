@@ -85,6 +85,14 @@ function createPurrAudio(modeKey) {
   let noiseGain = null;
   let suspendTimer = null;
 
+  // --- Android lockscreen: resume AudioContext when page becomes visible again ---
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  };
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
   const createPinkNoise = (audioCtx) => {
     const bufferSize = audioCtx.sampleRate * 2;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -199,6 +207,20 @@ function createPurrAudio(modeKey) {
         noiseGain.gain.setValueAtTime(0, now);
         noiseGain.gain.linearRampToValueAtTime(level * mode.noiseRatio, now + 2);
       }
+
+      // --- Media Session API: tell Android this is a media app so audio
+      //     continues playing through the lockscreen. ---
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Sleep Companion',
+          artist: 'Soothing Purr',
+          album: mode.label,
+        });
+        navigator.mediaSession.playbackState = 'playing';
+        // Allow lockscreen controls to toggle purring
+        navigator.mediaSession.setActionHandler('play', () => this.start(level));
+        navigator.mediaSession.setActionHandler('pause', () => this.stop());
+      }
     },
     stop() {
       if (!ctx || !master) return;
@@ -214,6 +236,11 @@ function createPurrAudio(modeKey) {
         suspendTimer = null;
         if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
       }, 2000);
+
+      // Update lockscreen media controls
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
     },
     setLevel(level) {
       if (!ctx || !master) return;
@@ -227,6 +254,7 @@ function createPurrAudio(modeKey) {
         clearTimeout(suspendTimer);
         suspendTimer = null;
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       try { oscillators.forEach((osc) => osc.stop()); } catch (_) {}
       try { noiseSource?.stop(); } catch (_) {}
       if (ctx) ctx.close().catch(() => {});
