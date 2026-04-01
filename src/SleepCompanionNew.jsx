@@ -85,16 +85,52 @@ function createPurrAudio(modeKey) {
   let noiseGain = null;
   let suspendTimer = null;
 
-  // --- Android lockscreen: resume AudioContext when page becomes visible again ---
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === 'visible' && ctx && ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+  // FIX: Track intentional play state and current volume target so we can
+  // correctly restore audio after lockscreen/interruption resumes.
+  let isPlaying = false;
+  let targetLevel = 0;
+
+  // --- Shared resume helper: called from any recovery path ---
+  const tryResume = () => {
+    if (!ctx || !isPlaying) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        // FIX: Ramp gain back to target after resuming — the previous code
+        // resumed the context but never restored the volume, causing silence.
+        if (master && isPlaying) {
+          const now = ctx.currentTime;
+          master.gain.cancelScheduledValues(now);
+          master.gain.setValueAtTime(master.gain.value, now);
+          master.gain.linearRampToValueAtTime(targetLevel, now + 0.6);
+          if (noiseGain) {
+            noiseGain.gain.cancelScheduledValues(now);
+            noiseGain.gain.setValueAtTime(noiseGain.gain.value, now);
+            noiseGain.gain.linearRampToValueAtTime(
+              targetLevel * mode.noiseRatio,
+              now + 0.6
+            );
+          }
+        }
+      }).catch(() => {});
     }
   };
-  document.addEventListener('visibilitychange', handleVisibilityChange);
 
+  // --- Lockscreen / tab-switch recovery ---
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') tryResume();
+  };
+
+  // FIX: Page Lifecycle API (Chrome 68+) — fires when OS resumes a frozen page.
+  const handlePageResume = () => tryResume();
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('resume', handlePageResume);
+
+  // FIX: Longer noise buffer (5 s vs 2 s) reduces loop-repeat artifacts.
+  // Crossfade at the loop boundary eliminates the audible click caused by
+  // the discontinuity in the pink-noise filter state between end and start.
   const createPinkNoise = (audioCtx) => {
-    const bufferSize = audioCtx.sampleRate * 2;
+    const bufferSize = audioCtx.sampleRate * 5;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
     let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
@@ -109,6 +145,14 @@ function createPurrAudio(modeKey) {
       data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
       b6 = white * 0.115926;
     }
+    // Crossfade: fade the last 80 ms out and the first 80 ms in so the loop
+    // boundary is inaudible even if the filter state differs at each end.
+    const fadeLen = Math.min(Math.floor(audioCtx.sampleRate * 0.08), bufferSize >> 1);
+    for (let i = 0; i < fadeLen; i++) {
+      const t = i / fadeLen;
+      data[i] *= t;                              // fade in at start
+      data[bufferSize - fadeLen + i] *= (1 - t); // fade out at end
+    }
     return buffer;
   };
 
@@ -118,6 +162,16 @@ function createPurrAudio(modeKey) {
       if (!AudioCtx) return false;
 
       ctx = new AudioCtx();
+
+      // FIX: Listen for unexpected suspensions (phone calls, Siri, other apps
+      // stealing audio focus on Android/iOS).  Wait 500 ms before retrying so
+      // we don't fight the browser mid-interruption.
+      ctx.addEventListener('statechange', () => {
+        if (ctx.state === 'suspended' && isPlaying) {
+          setTimeout(tryResume, 500);
+        }
+      });
+
       master = ctx.createGain();
       master.gain.value = 0;
       master.connect(ctx.destination);
@@ -179,6 +233,18 @@ function createPurrAudio(modeKey) {
       noiseFilter.connect(noiseGain);
       noiseGain.connect(breathingBus);
       noiseSource.start();
+
+      // FIX: iOS keep-alive — a near-silent oscillator (0.00001 gain, inaudible)
+      // keeps the AudioContext's audio session active through the lock screen.
+      // Without this, iOS releases the session when the screen locks and all
+      // Web Audio nodes go silent even after the context is resumed.
+      const keepAliveOsc = ctx.createOscillator();
+      const keepAliveGain = ctx.createGain();
+      keepAliveGain.gain.value = 0.00001;
+      keepAliveOsc.connect(keepAliveGain);
+      keepAliveGain.connect(ctx.destination);
+      keepAliveOsc.start();
+      oscillators.push(keepAliveOsc);
     }
 
     if (suspendTimer !== null) {
@@ -194,6 +260,12 @@ function createPurrAudio(modeKey) {
     async start(level) {
       const ok = await setup();
       if (!ok || !ctx || !master) return;
+
+      // FIX: Set intent flags before ramping so that any statechange event
+      // fired during startup correctly sees isPlaying = true.
+      isPlaying = true;
+      targetLevel = level;
+
       const now = ctx.currentTime;
       master.gain.cancelScheduledValues(now);
       master.gain.setValueAtTime(master.gain.value, now);
@@ -203,8 +275,7 @@ function createPurrAudio(modeKey) {
         noiseGain.gain.linearRampToValueAtTime(level * mode.noiseRatio, now + 2);
       }
 
-      // --- Media Session API: tell Android this is a media app so audio
-      //     continues playing through the lockscreen. ---
+      // --- Media Session API: tell the OS this is a media app ---
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: 'Sleep Companion',
@@ -216,7 +287,13 @@ function createPurrAudio(modeKey) {
         navigator.mediaSession.setActionHandler('pause', () => this.stop());
       }
     },
+
     stop() {
+      // FIX: Clear intent flags first so the statechange / visibilitychange
+      // handlers do not try to resume a context the user intentionally stopped.
+      isPlaying = false;
+      targetLevel = 0;
+
       if (!ctx || !master) return;
       const now = ctx.currentTime;
       master.gain.cancelScheduledValues(now);
@@ -225,28 +302,39 @@ function createPurrAudio(modeKey) {
       if (noiseGain) {
         noiseGain.gain.linearRampToValueAtTime(0, now + 1.8);
       }
+
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
-        if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
+        // FIX: Only suspend if the user hasn't restarted playback in the
+        // meantime (quick tap-stop-tap scenario).
+        if (ctx && ctx.state === 'running' && !isPlaying) {
+          ctx.suspend().catch(() => {});
+        }
       }, 2000);
 
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused';
       }
     },
+
     setLevel(level) {
+      targetLevel = level;
       if (!ctx || !master) return;
       master.gain.setTargetAtTime(level, ctx.currentTime, 0.45);
       if (noiseGain) {
         noiseGain.gain.setTargetAtTime(level * mode.noiseRatio, ctx.currentTime, 0.45);
       }
     },
+
     dispose() {
+      isPlaying = false;
+      targetLevel = 0;
       if (suspendTimer !== null) {
         clearTimeout(suspendTimer);
         suspendTimer = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('resume', handlePageResume);
       try { oscillators.forEach((osc) => osc.stop()); } catch (_) {}
       try { noiseSource?.stop(); } catch (_) {}
       if (ctx) ctx.close().catch(() => {});
@@ -350,11 +438,19 @@ export default function SleepCompanionNew() {
   const [volume, setVolume] = useState(0.1);
   const [audioHint, setAudioHint] = useState('Tap the cat to start purring.');
   const audioRef = useRef(null);
+  const volumeRef = useRef(volume);
+
+  // FIX: Track whether audio was playing at the moment a mode switch is
+  // triggered so the modeKey effect can auto-restart the new engine.
+  const wasPlayingOnSwitchRef = useRef(false);
 
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showIosTip, setShowIosTip] = useState(false);
 
   const mode = MODES[modeKey];
+
+  // Keep volumeRef in sync so setTimeout callbacks read the latest volume.
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
 
   useEffect(() => {
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -397,8 +493,16 @@ export default function SleepCompanionNew() {
     }
     const engine = createPurrAudio(modeKey);
     audioRef.current = engine;
-    if (isPurring) {
-      engine.start(volume);
+
+    // FIX: If audio was playing when the mode switched, auto-restart on the
+    // new engine after a short crossfade gap (500 ms lets the old engine fade).
+    if (wasPlayingOnSwitchRef.current) {
+      wasPlayingOnSwitchRef.current = false;
+      setTimeout(() => {
+        engine.start(volumeRef.current);
+        setIsPurring(true);
+        setAudioHint('Purring... Tap to stop.');
+      }, 500);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeKey]);
@@ -434,9 +538,12 @@ export default function SleepCompanionNew() {
 
   const switchMode = (key) => {
     if (key === modeKey) return;
+    // FIX: Record play state before stopping so the modeKey effect can
+    // resume on the new engine automatically (seamless mode crossfade).
+    wasPlayingOnSwitchRef.current = isPurring;
     if (isPurring) stopPurr();
     setModeKey(key);
-    setAudioHint('Tap the cat to start purring.');
+    if (!isPurring) setAudioHint('Tap the cat to start purring.');
   };
 
   return (
