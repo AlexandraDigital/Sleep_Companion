@@ -69,7 +69,7 @@ const MODES = {
       'Small moments of warmth still count.',
       'You showed up today. That matters.',
       'I am here with you, purring softly.',
-      'Healing is not linear — and that\'s okay.',
+      "Healing is not linear \u2014 and that's okay.",
       'One gentle breath. Then another.',
       'You are cared for more than you know.',
     ],
@@ -113,7 +113,6 @@ function createPurrAudio(modeKey) {
       master.gain.value = 0;
       master.connect(ctx.destination);
 
-      // Breathing envelope LFO — rate tuned per mode
       const breathingLfo = ctx.createOscillator();
       breathingLfo.type = 'sine';
       breathingLfo.frequency.value = mode.breathingHz;
@@ -124,21 +123,18 @@ function createPurrAudio(modeKey) {
       breathingLfo.start();
       oscillators.push(breathingLfo);
 
-      // AM modulator — frequency tuned per therapeutic range
       const amMod = ctx.createOscillator();
       amMod.type = 'sine';
       amMod.frequency.value = mode.amFreq;
       amMod.start();
       oscillators.push(amMod);
 
-      // Low-pass filter for warmth — cutoff tuned per mode
       const lowpass = ctx.createBiquadFilter();
       lowpass.type = 'lowpass';
       lowpass.frequency.value = mode.lowpassFreq;
       lowpass.Q.value = 1.2;
       lowpass.connect(master);
 
-      // Harmonics with AM applied
       mode.harmonics.forEach(({ freq, gain, type }) => {
         const osc = ctx.createOscillator();
         const amp = ctx.createGain();
@@ -156,7 +152,6 @@ function createPurrAudio(modeKey) {
         oscillators.push(osc);
       });
 
-      // Pink noise rumble
       const noiseBuffer = createPinkNoise(ctx);
       noiseSource = ctx.createBufferSource();
       noiseSource.buffer = noiseBuffer;
@@ -312,7 +307,37 @@ export default function SleepCompanionNew() {
   const [audioHint, setAudioHint] = useState('Tap the cat to start purring.');
   const audioRef = useRef(null);
 
+  // PWA install state
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [showIosTip, setShowIosTip] = useState(false);
+
   const mode = MODES[modeKey];
+
+  // Detect iOS for install tip; capture beforeinstallprompt for Android/Chrome
+  useEffect(() => {
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      navigator.standalone === true;
+    if (isIos && !isStandalone) setShowIosTip(true);
+
+    const onPrompt = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', () => setInstallPrompt(null));
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+    };
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') setInstallPrompt(null);
+  };
 
   // Rotate calm lines for current mode
   useEffect(() => {
@@ -400,9 +425,9 @@ export default function SleepCompanionNew() {
 
         {/* MODE DESCRIPTION */}
         <p className="scn-mode-desc">
-          {modeKey === 'sleep' && '27 Hz · deep delta · slow breath'}
-          {modeKey === 'anxiety' && '50 Hz · steady grounding · calming rhythm'}
-          {modeKey === 'depression' && '120 Hz · warm harmonics · gentle uplift'}
+          {modeKey === 'sleep' && '27 Hz \u00b7 deep delta \u00b7 slow breath'}
+          {modeKey === 'anxiety' && '50 Hz \u00b7 steady grounding \u00b7 calming rhythm'}
+          {modeKey === 'depression' && '120 Hz \u00b7 warm harmonics \u00b7 gentle uplift'}
         </p>
 
         {/* CAT */}
@@ -430,6 +455,23 @@ export default function SleepCompanionNew() {
             onChange={(event) => setVolume(Number(event.target.value))}
           />
         </label>
+
+        {/* PWA INSTALL */}
+        {(installPrompt || showIosTip) && (
+          <div className="scn-install">
+            {installPrompt && (
+              <button type="button" className="scn-install-btn" onClick={handleInstall}>
+                📲 Add to Home Screen
+              </button>
+            )}
+            {showIosTip && (
+              <p className="scn-install-tip">
+                To install on iOS: tap <strong>Share ↑</strong> then <strong>Add to Home Screen</strong>
+              </p>
+            )}
+          </div>
+        )}
+
       </section>
     </main>
   );

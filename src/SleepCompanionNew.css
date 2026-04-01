@@ -139,3 +139,38 @@
   min-height: 20px;
   margin: 8px 0 0;
 }
+
+/* PWA Install Banner */
+.scn-install {
+  margin-top: 16px;
+  border-top: 1px solid rgba(255, 186, 97, 0.12);
+  padding-top: 14px;
+}
+
+.scn-install-btn {
+  width: 100%;
+  border: 1px solid rgba(255, 186, 97, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 186, 97, 0.08);
+  color: #f4e8d1;
+  padding: 11px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.scn-install-btn:hover {
+  background: rgba(255, 186, 97, 0.18);
+  border-color: rgba(255, 186, 97, 0.55);
+}
+
+.scn-install-tip {
+  color: #c9ad82;
+  font-size: 12px;
+  margin: 10px 0 0;
+  line-height: 1.6;
+}
+
+.scn-install-tip strong {
+  color: #f4e8d1;
+}
