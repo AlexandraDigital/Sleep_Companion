@@ -124,13 +124,23 @@ function createPurrAudio(modeKey) {
   const handlePageResume = () => tryResume();
 
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener('resume', handlePageResume);
+  // FIX: Page Lifecycle 'resume' fires on document, not window.
+  // Using window caused the handler to never fire on Android lockscreen.
+  document.addEventListener('resume', handlePageResume);
 
-  // FIX: Longer noise buffer (5 s vs 2 s) reduces loop-repeat artifacts.
-  // Crossfade at the loop boundary eliminates the audible click caused by
-  // the discontinuity in the pink-noise filter state between end and start.
+  // FIX: Use a 20-second buffer so the loop boundary occurs every 20 s
+  // instead of every 5 s — dramatically reducing how often any loop artifact
+  // is audible in both app mode and lockscreen.
+  //
+  // FIX: Removed the end fade-out.  The previous code faded the LAST 80 ms to
+  // silence AND faded the FIRST 80 ms from silence, creating a 160 ms dead
+  // zone of silence at every loop boundary — audible as a periodic dropout in
+  // ALL modes every 5 seconds.  Now only the start has a short fade-in (30 ms)
+  // so the initial play-start is smooth; at the loop point the buffer wraps at
+  // full volume directly into the short start fade, producing at most a 30 ms
+  // ramp rather than a 160 ms silence gap.
   const createPinkNoise = (audioCtx) => {
-    const bufferSize = audioCtx.sampleRate * 5;
+    const bufferSize = audioCtx.sampleRate * 20;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
     let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
@@ -145,13 +155,12 @@ function createPurrAudio(modeKey) {
       data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
       b6 = white * 0.115926;
     }
-    // Crossfade: fade the last 80 ms out and the first 80 ms in so the loop
-    // boundary is inaudible even if the filter state differs at each end.
-    const fadeLen = Math.min(Math.floor(audioCtx.sampleRate * 0.08), bufferSize >> 1);
+    // Short fade-in only at the start (30 ms) so first playback is smooth.
+    // No fade-out at the end — this eliminates the 160 ms silence valley that
+    // the old double-fade was creating at every loop boundary.
+    const fadeLen = Math.min(Math.floor(audioCtx.sampleRate * 0.03), bufferSize >> 1);
     for (let i = 0; i < fadeLen; i++) {
-      const t = i / fadeLen;
-      data[i] *= t;                              // fade in at start
-      data[bufferSize - fadeLen + i] *= (1 - t); // fade out at end
+      data[i] *= i / fadeLen; // fade in at start only
     }
     return buffer;
   };
@@ -166,11 +175,16 @@ function createPurrAudio(modeKey) {
       // FIX: Listen for unexpected suspensions (phone calls, Siri, other apps
       // stealing audio focus on Android/iOS).  Wait 500 ms before retrying so
       // we don't fight the browser mid-interruption.
-      ctx.addEventListener('statechange', () => {
+      // FIX: Also set ctx.onstatechange as a fallback — older Android WebViews
+      // (Chrome < 66, some Samsung Internet versions) don't support
+      // addEventListener on AudioContext, but do honour the onstatechange property.
+      const onStateChange = () => {
         if (ctx.state === 'suspended' && isPlaying) {
           setTimeout(tryResume, 500);
         }
-      });
+      };
+      ctx.addEventListener('statechange', onStateChange);
+      ctx.onstatechange = onStateChange;
 
       master = ctx.createGain();
       master.gain.value = 0;
@@ -334,7 +348,7 @@ function createPurrAudio(modeKey) {
         suspendTimer = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('resume', handlePageResume);
+      document.removeEventListener('resume', handlePageResume);
       try { oscillators.forEach((osc) => osc.stop()); } catch (_) {}
       try { noiseSource?.stop(); } catch (_) {}
       if (ctx) ctx.close().catch(() => {});
