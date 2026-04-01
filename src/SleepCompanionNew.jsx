@@ -85,6 +85,14 @@ function createPurrAudio(modeKey) {
   let noiseGain = null;
   let suspendTimer = null;
 
+  // --- Android lockscreen: resume AudioContext when page becomes visible again ---
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  };
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
   const createPinkNoise = (audioCtx) => {
     const bufferSize = audioCtx.sampleRate * 2;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -114,8 +122,6 @@ function createPurrAudio(modeKey) {
       master.gain.value = 0;
       master.connect(ctx.destination);
 
-      // Breathing LFO — routed through a separate gain node so it
-      // never bleeds through when master.gain reaches 0.
       const breathingBus = ctx.createGain();
       breathingBus.gain.value = 1;
       breathingBus.connect(master);
@@ -126,8 +132,6 @@ function createPurrAudio(modeKey) {
       const breathingLfoGain = ctx.createGain();
       breathingLfoGain.gain.value = 0.007;
       breathingLfo.connect(breathingLfoGain);
-      // Modulate the breathing bus gain, NOT master.gain directly,
-      // so scheduled ramps on master.gain stay clean.
       breathingLfoGain.connect(breathingBus.gain);
       breathingLfo.start();
       oscillators.push(breathingLfo);
@@ -177,7 +181,6 @@ function createPurrAudio(modeKey) {
       noiseSource.start();
     }
 
-    // Cancel any pending auto-suspend from a previous stop()
     if (suspendTimer !== null) {
       clearTimeout(suspendTimer);
       suspendTimer = null;
@@ -199,6 +202,19 @@ function createPurrAudio(modeKey) {
         noiseGain.gain.setValueAtTime(0, now);
         noiseGain.gain.linearRampToValueAtTime(level * mode.noiseRatio, now + 2);
       }
+
+      // --- Media Session API: tell Android this is a media app so audio
+      //     continues playing through the lockscreen. ---
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Sleep Companion',
+          artist: 'Soothing Purr',
+          album: mode.label,
+        });
+        navigator.mediaSession.playbackState = 'playing';
+        navigator.mediaSession.setActionHandler('play', () => this.start(level));
+        navigator.mediaSession.setActionHandler('pause', () => this.stop());
+      }
     },
     stop() {
       if (!ctx || !master) return;
@@ -209,11 +225,14 @@ function createPurrAudio(modeKey) {
       if (noiseGain) {
         noiseGain.gain.linearRampToValueAtTime(0, now + 1.8);
       }
-      // Suspend context after the fade to prevent any LFO bleed at zero gain
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
         if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
       }, 2000);
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
     },
     setLevel(level) {
       if (!ctx || !master) return;
@@ -227,6 +246,7 @@ function createPurrAudio(modeKey) {
         clearTimeout(suspendTimer);
         suspendTimer = null;
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       try { oscillators.forEach((osc) => osc.stop()); } catch (_) {}
       try { noiseSource?.stop(); } catch (_) {}
       if (ctx) ctx.close().catch(() => {});
@@ -331,13 +351,11 @@ export default function SleepCompanionNew() {
   const [audioHint, setAudioHint] = useState('Tap the cat to start purring.');
   const audioRef = useRef(null);
 
-  // PWA install state
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showIosTip, setShowIosTip] = useState(false);
 
   const mode = MODES[modeKey];
 
-  // Detect iOS for install tip; capture beforeinstallprompt for Android/Chrome
   useEffect(() => {
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const isStandalone =
@@ -363,7 +381,6 @@ export default function SleepCompanionNew() {
     if (outcome === 'accepted') setInstallPrompt(null);
   };
 
-  // Rotate calm lines for current mode
   useEffect(() => {
     setLineIndex(0);
     const interval = window.setInterval(() => {
@@ -372,10 +389,6 @@ export default function SleepCompanionNew() {
     return () => window.clearInterval(interval);
   }, [modeKey]);
 
-  // Rebuild audio engine when mode changes (also handles initial mount).
-  // Always creates a fresh engine so audioRef.current is never null after mount.
-  // Delays dispose by 2.1 s to let any in-progress fade-out finish cleanly
-  // instead of closing the AudioContext mid-fade (which causes a click).
   useEffect(() => {
     const stale = audioRef.current;
     if (stale) {
@@ -430,7 +443,6 @@ export default function SleepCompanionNew() {
     <main className="scn-shell">
       <section className="scn-card" style={{ '--accent': mode.accentColor }}>
 
-        {/* MODE TABS */}
         <div className="scn-mode-tabs" role="tablist" aria-label="Therapeutic mode">
           {Object.values(MODES).map((m) => (
             <button
@@ -446,14 +458,12 @@ export default function SleepCompanionNew() {
           ))}
         </div>
 
-        {/* MODE DESCRIPTION */}
         <p className="scn-mode-desc">
           {modeKey === 'sleep' && '27 Hz \u00b7 deep delta \u00b7 slow breath'}
           {modeKey === 'anxiety' && '50 Hz \u00b7 steady grounding \u00b7 calming rhythm'}
           {modeKey === 'depression' && '120 Hz \u00b7 warm harmonics \u00b7 gentle uplift'}
         </p>
 
-        {/* CAT */}
         <button type="button" className="scn-cat-wrap" onClick={togglePurr} aria-label="Toggle soothing purr">
           <TabbyCat isPurring={isPurring} glowRgb={mode.glowRgb} />
         </button>
@@ -479,7 +489,6 @@ export default function SleepCompanionNew() {
           />
         </label>
 
-        {/* PWA INSTALL */}
         {(installPrompt || showIosTip) && (
           <div className="scn-install">
             {installPrompt && (
