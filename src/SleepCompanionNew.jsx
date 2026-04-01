@@ -1,16 +1,83 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './SleepCompanionNew.css';
 
-const CALM_LINES = [
-  'Hi friend. You are safe with me.',
-  'Let your shoulders drop a little.',
-  'Slow breath in, softer breath out.',
-  'I am here. No rush. No pressure.',
-  'Close your eyes. I will keep watch.',
-  'You did enough today.',
-];
+const MODES = {
+  sleep: {
+    key: 'sleep',
+    label: '🌙 Sleep',
+    accentColor: '#7ba3d4',
+    glowRgb: '107, 150, 210',
+    amFreq: 27,
+    breathingHz: 0.10,
+    lowpassFreq: 220,
+    harmonics: [
+      { freq: 27, gain: 0.08, type: 'triangle' },
+      { freq: 54, gain: 0.04, type: 'sine' },
+      { freq: 81, gain: 0.02, type: 'sine' },
+    ],
+    noiseRatio: 0.12,
+    lines: [
+      'Let your whole body get heavy.',
+      'Each breath carries you deeper.',
+      'Close your eyes. I am here.',
+      'You are safe. Let go.',
+      'Drift gently into rest.',
+      'The world can wait until morning.',
+    ],
+  },
+  anxiety: {
+    key: 'anxiety',
+    label: '🍃 Anxiety',
+    accentColor: '#7abf8a',
+    glowRgb: '122, 191, 138',
+    amFreq: 50,
+    breathingHz: 0.18,
+    lowpassFreq: 380,
+    harmonics: [
+      { freq: 50,  gain: 0.07,  type: 'triangle' },
+      { freq: 100, gain: 0.04,  type: 'sine' },
+      { freq: 150, gain: 0.025, type: 'sine' },
+      { freq: 25,  gain: 0.03,  type: 'sine' },
+    ],
+    noiseRatio: 0.08,
+    lines: [
+      'You are here. You are safe.',
+      'Right now, only this moment matters.',
+      'Let each exhale soften the tension.',
+      'Your nervous system is settling.',
+      "One breath at a time. You've got this.",
+      'I am steady. You can be steady too.',
+    ],
+  },
+  depression: {
+    key: 'depression',
+    label: '💛 Uplift',
+    accentColor: '#d4a84b',
+    glowRgb: '212, 168, 75',
+    amFreq: 120,
+    breathingHz: 0.22,
+    lowpassFreq: 580,
+    harmonics: [
+      { freq: 120, gain: 0.055, type: 'sine' },
+      { freq: 60,  gain: 0.05,  type: 'triangle' },
+      { freq: 180, gain: 0.03,  type: 'sine' },
+      { freq: 240, gain: 0.015, type: 'sine' },
+      { freq: 30,  gain: 0.035, type: 'triangle' },
+    ],
+    noiseRatio: 0.05,
+    lines: [
+      'Small moments of warmth still count.',
+      'You showed up today. That matters.',
+      'I am here with you, purring softly.',
+      'Healing is not linear — and that\'s okay.',
+      'One gentle breath. Then another.',
+      'You are cared for more than you know.',
+    ],
+  },
+};
 
-function createPurrAudio() {
+function createPurrAudio(modeKey) {
+  const mode = MODES[modeKey];
   let ctx = null;
   let master = null;
   const oscillators = [];
@@ -46,46 +113,39 @@ function createPurrAudio() {
       master.gain.value = 0;
       master.connect(ctx.destination);
 
-      // Breathing envelope LFO (~0.15 Hz slow swell)
+      // Breathing envelope LFO — rate tuned per mode
       const breathingLfo = ctx.createOscillator();
       breathingLfo.type = 'sine';
-      breathingLfo.frequency.value = 0.15;
+      breathingLfo.frequency.value = mode.breathingHz;
       const breathingLfoGain = ctx.createGain();
-      breathingLfoGain.gain.value = 0.008;
+      breathingLfoGain.gain.value = 0.007;
       breathingLfo.connect(breathingLfoGain);
       breathingLfoGain.connect(master.gain);
       breathingLfo.start();
       oscillators.push(breathingLfo);
 
-      // AM modulator at 27 Hz
+      // AM modulator — frequency tuned per therapeutic range
       const amMod = ctx.createOscillator();
       amMod.type = 'sine';
-      amMod.frequency.value = 27;
+      amMod.frequency.value = mode.amFreq;
       amMod.start();
       oscillators.push(amMod);
 
-      // Low-pass filter for warmth
+      // Low-pass filter for warmth — cutoff tuned per mode
       const lowpass = ctx.createBiquadFilter();
       lowpass.type = 'lowpass';
-      lowpass.frequency.value = 320;
+      lowpass.frequency.value = mode.lowpassFreq;
       lowpass.Q.value = 1.2;
       lowpass.connect(master);
 
       // Harmonics with AM applied
-      [
-        { freq: 27, gain: 0.07, type: 'triangle' },
-        { freq: 54, gain: 0.04, type: 'sine' },
-        { freq: 81, gain: 0.02, type: 'sine' },
-        { freq: 108, gain: 0.01, type: 'sine' },
-        { freq: 135, gain: 0.005, type: 'sine' },
-      ].forEach(({ freq, gain, type }) => {
+      mode.harmonics.forEach(({ freq, gain, type }) => {
         const osc = ctx.createOscillator();
         const amp = ctx.createGain();
         osc.type = type;
         osc.frequency.value = freq;
         osc.detune.value = (Math.random() - 0.5) * 3;
         amp.gain.value = gain;
-        // AM modulation depth
         const modDepth = ctx.createGain();
         modDepth.gain.value = gain * 0.55;
         amMod.connect(modDepth);
@@ -105,7 +165,7 @@ function createPurrAudio() {
       noiseGain.gain.value = 0;
       const noiseFilter = ctx.createBiquadFilter();
       noiseFilter.type = 'lowpass';
-      noiseFilter.frequency.value = 110;
+      noiseFilter.frequency.value = mode.lowpassFreq * 0.4;
       noiseFilter.Q.value = 0.5;
       noiseSource.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
@@ -127,7 +187,7 @@ function createPurrAudio() {
       master.gain.linearRampToValueAtTime(level, now + 1.4);
       if (noiseGain) {
         noiseGain.gain.setValueAtTime(0, now);
-        noiseGain.gain.linearRampToValueAtTime(level * 0.08, now + 2);
+        noiseGain.gain.linearRampToValueAtTime(level * mode.noiseRatio, now + 2);
       }
     },
     stop() {
@@ -144,7 +204,7 @@ function createPurrAudio() {
       if (!ctx || !master) return;
       master.gain.setTargetAtTime(level, ctx.currentTime, 0.45);
       if (noiseGain) {
-        noiseGain.gain.setTargetAtTime(level * 0.08, ctx.currentTime, 0.45);
+        noiseGain.gain.setTargetAtTime(level * mode.noiseRatio, ctx.currentTime, 0.45);
       }
     },
     dispose() {
@@ -155,7 +215,7 @@ function createPurrAudio() {
   };
 }
 
-function TabbyCat({ isPurring }) {
+function TabbyCat({ isPurring, glowRgb }) {
   return (
     <svg
       viewBox="0 0 200 260"
@@ -163,6 +223,7 @@ function TabbyCat({ isPurring }) {
       height="208"
       xmlns="http://www.w3.org/2000/svg"
       className={`tabby-cat ${isPurring ? 'is-purring' : ''}`}
+      style={isPurring ? { filter: `drop-shadow(0 0 18px rgba(${glowRgb}, 0.45))` } : {}}
       aria-hidden="true"
     >
       {/* TAIL */}
@@ -182,7 +243,6 @@ function TabbyCat({ isPurring }) {
       <path d="M72 165 Q100 162 128 165" fill="none" stroke="#b56a25" strokeWidth="3" opacity="0.7" />
       <path d="M68 178 Q100 175 132 178" fill="none" stroke="#b56a25" strokeWidth="3" opacity="0.6" />
       <path d="M66 193 Q100 190 134 193" fill="none" stroke="#b56a25" strokeWidth="3" opacity="0.5" />
-      {/* belly */}
       <ellipse cx="100" cy="205" rx="28" ry="32" fill="#f0c07a" />
 
       {/* PAWS */}
@@ -245,21 +305,41 @@ function TabbyCat({ isPurring }) {
 }
 
 export default function SleepCompanionNew() {
+  const [modeKey, setModeKey] = useState('sleep');
   const [lineIndex, setLineIndex] = useState(0);
   const [isPurring, setIsPurring] = useState(false);
   const [volume, setVolume] = useState(0.1);
   const [audioHint, setAudioHint] = useState('Tap the cat to start purring.');
   const audioRef = useRef(null);
 
+  const mode = MODES[modeKey];
+
+  // Rotate calm lines for current mode
   useEffect(() => {
+    setLineIndex(0);
     const interval = window.setInterval(() => {
-      setLineIndex((current) => (current + 1) % CALM_LINES.length);
+      setLineIndex((c) => (c + 1) % mode.lines.length);
     }, 5000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [modeKey]);
 
+  // Rebuild audio engine when mode changes
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.dispose();
+      audioRef.current = null;
+    }
+    if (isPurring) {
+      const engine = createPurrAudio(modeKey);
+      audioRef.current = engine;
+      engine.start(volume);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeKey]);
+
+  // Lazy init
   if (!audioRef.current && typeof window !== 'undefined') {
-    audioRef.current = createPurrAudio();
+    audioRef.current = createPurrAudio(modeKey);
   }
 
   useEffect(() => {
@@ -291,15 +371,47 @@ export default function SleepCompanionNew() {
     else startPurr();
   };
 
+  const switchMode = (key) => {
+    if (key === modeKey) return;
+    if (isPurring) stopPurr();
+    setModeKey(key);
+    setAudioHint('Tap the cat to start purring.');
+  };
+
   return (
     <main className="scn-shell">
-      <section className="scn-card">
+      <section className="scn-card" style={{ '--accent': mode.accentColor }}>
+
+        {/* MODE TABS */}
+        <div className="scn-mode-tabs" role="tablist" aria-label="Therapeutic mode">
+          {Object.values(MODES).map((m) => (
+            <button
+              key={m.key}
+              role="tab"
+              aria-selected={m.key === modeKey}
+              className={`scn-mode-tab ${m.key === modeKey ? 'active' : ''}`}
+              style={m.key === modeKey ? { '--tab-color': m.accentColor } : {}}
+              onClick={() => switchMode(m.key)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* MODE DESCRIPTION */}
+        <p className="scn-mode-desc">
+          {modeKey === 'sleep' && '27 Hz · deep delta · slow breath'}
+          {modeKey === 'anxiety' && '50 Hz · steady grounding · calming rhythm'}
+          {modeKey === 'depression' && '120 Hz · warm harmonics · gentle uplift'}
+        </p>
+
+        {/* CAT */}
         <button type="button" className="scn-cat-wrap" onClick={togglePurr} aria-label="Toggle soothing purr">
-          <TabbyCat isPurring={isPurring} />
+          <TabbyCat isPurring={isPurring} glowRgb={mode.glowRgb} />
         </button>
 
         <h1>Sleep Companion</h1>
-        <p className="scn-line">{CALM_LINES[lineIndex]}</p>
+        <p className="scn-line">{mode.lines[lineIndex]}</p>
 
         <button type="button" className="scn-btn" onClick={togglePurr}>
           {isPurring ? 'stop soothing purr' : 'start soothing purr'}

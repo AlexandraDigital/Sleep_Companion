@@ -10,6 +10,7 @@
 }
 
 .scn-card {
+  --accent: #7ba3d4;
   width: min(430px, 100%);
   background: rgba(41, 30, 19, 0.9);
   border: 1px solid rgba(255, 186, 97, 0.2);
@@ -17,6 +18,49 @@
   padding: 24px;
   text-align: center;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* MODE TABS */
+.scn-mode-tabs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.scn-mode-tab {
+  --tab-color: #7ba3d4;
+  flex: 1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #c9ad82;
+  padding: 8px 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+
+.scn-mode-tab.active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--tab-color);
+  color: var(--tab-color);
+  font-weight: 600;
+}
+
+.scn-mode-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #f4e8d1;
+}
+
+.scn-mode-desc {
+  color: #8a7a62;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 10px;
+  min-height: 16px;
 }
 
 .scn-cat-wrap {
@@ -33,15 +77,14 @@
 .tabby-cat {
   display: block;
   animation: breathe 5s ease-in-out infinite;
-  transition: filter 0.4s ease;
+  transition: filter 0.6s ease;
 }
 
 .tabby-cat.is-purring {
   animation: breathe 2.2s ease-in-out infinite;
-  filter: drop-shadow(0 0 18px rgba(255, 189, 104, 0.35));
 }
 
-/* Tail wag animation — applied to the <g> wrapping the tail */
+/* Tail wag animation */
 .tail-wag {
   animation: tailWag 0.55s ease-in-out infinite alternate;
 }
@@ -54,13 +97,14 @@
 .scn-line {
   color: #d8bf98;
   min-height: 48px;
+  transition: opacity 0.5s;
 }
 
 .scn-btn {
   width: 100%;
-  border: 1px solid rgba(255, 186, 97, 0.35);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
   border-radius: 999px;
-  background: rgba(255, 186, 97, 0.1);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: #f4e8d1;
   padding: 12px 16px;
   cursor: pointer;
@@ -69,7 +113,7 @@
 }
 
 .scn-btn:hover {
-  background: rgba(255, 186, 97, 0.2);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .scn-volume {
@@ -81,7 +125,7 @@
 .scn-volume input {
   width: 100%;
   margin-top: 8px;
-  accent-color: #efb357;
+  accent-color: var(--accent);
 }
 
 @keyframes breathe {
