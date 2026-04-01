@@ -83,6 +83,7 @@ function createPurrAudio(modeKey) {
   const oscillators = [];
   let noiseSource = null;
   let noiseGain = null;
+  let suspendTimer = null;
 
   const createPinkNoise = (audioCtx) => {
     const bufferSize = audioCtx.sampleRate * 2;
@@ -113,13 +114,21 @@ function createPurrAudio(modeKey) {
       master.gain.value = 0;
       master.connect(ctx.destination);
 
+      // Breathing LFO — routed through a separate gain node so it
+      // never bleeds through when master.gain reaches 0.
+      const breathingBus = ctx.createGain();
+      breathingBus.gain.value = 1;
+      breathingBus.connect(master);
+
       const breathingLfo = ctx.createOscillator();
       breathingLfo.type = 'sine';
       breathingLfo.frequency.value = mode.breathingHz;
       const breathingLfoGain = ctx.createGain();
       breathingLfoGain.gain.value = 0.007;
       breathingLfo.connect(breathingLfoGain);
-      breathingLfoGain.connect(master.gain);
+      // Modulate the breathing bus gain, NOT master.gain directly,
+      // so scheduled ramps on master.gain stay clean.
+      breathingLfoGain.connect(breathingBus.gain);
       breathingLfo.start();
       oscillators.push(breathingLfo);
 
@@ -133,7 +142,7 @@ function createPurrAudio(modeKey) {
       lowpass.type = 'lowpass';
       lowpass.frequency.value = mode.lowpassFreq;
       lowpass.Q.value = 1.2;
-      lowpass.connect(master);
+      lowpass.connect(breathingBus);
 
       mode.harmonics.forEach(({ freq, gain, type }) => {
         const osc = ctx.createOscillator();
@@ -164,8 +173,14 @@ function createPurrAudio(modeKey) {
       noiseFilter.Q.value = 0.5;
       noiseSource.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
-      noiseGain.connect(master);
+      noiseGain.connect(breathingBus);
       noiseSource.start();
+    }
+
+    // Cancel any pending auto-suspend from a previous stop()
+    if (suspendTimer !== null) {
+      clearTimeout(suspendTimer);
+      suspendTimer = null;
     }
 
     if (ctx.state === 'suspended') await ctx.resume();
@@ -194,6 +209,11 @@ function createPurrAudio(modeKey) {
       if (noiseGain) {
         noiseGain.gain.linearRampToValueAtTime(0, now + 1.8);
       }
+      // Suspend context after the fade to prevent any LFO bleed at zero gain
+      suspendTimer = setTimeout(() => {
+        suspendTimer = null;
+        if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
+      }, 2000);
     },
     setLevel(level) {
       if (!ctx || !master) return;
@@ -203,6 +223,10 @@ function createPurrAudio(modeKey) {
       }
     },
     dispose() {
+      if (suspendTimer !== null) {
+        clearTimeout(suspendTimer);
+        suspendTimer = null;
+      }
       try { oscillators.forEach((osc) => osc.stop()); } catch (_) {}
       try { noiseSource?.stop(); } catch (_) {}
       if (ctx) ctx.close().catch(() => {});
@@ -348,24 +372,23 @@ export default function SleepCompanionNew() {
     return () => window.clearInterval(interval);
   }, [modeKey]);
 
-  // Rebuild audio engine when mode changes
+  // Rebuild audio engine when mode changes (also handles initial mount).
+  // Always creates a fresh engine so audioRef.current is never null after mount.
+  // Delays dispose by 2.1 s to let any in-progress fade-out finish cleanly
+  // instead of closing the AudioContext mid-fade (which causes a click).
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.dispose();
+    const stale = audioRef.current;
+    if (stale) {
+      setTimeout(() => stale.dispose(), 2100);
       audioRef.current = null;
     }
+    const engine = createPurrAudio(modeKey);
+    audioRef.current = engine;
     if (isPurring) {
-      const engine = createPurrAudio(modeKey);
-      audioRef.current = engine;
       engine.start(volume);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeKey]);
-
-  // Lazy init
-  if (!audioRef.current && typeof window !== 'undefined') {
-    audioRef.current = createPurrAudio(modeKey);
-  }
 
   useEffect(() => {
     if (isPurring) audioRef.current?.setLevel(volume);
