@@ -8,7 +8,9 @@ const MODES = {
     accentColor: '#7ba3d4',
     glowRgb: '107, 150, 210',
     amFreq: 27,
+    amDepthRatio: 0.40,
     breathingHz: 0.10,
+    breathingDepth: 0.18,
     lowpassFreq: 220,
     harmonics: [
       { freq: 27, gain: 0.08, type: 'triangle' },
@@ -31,7 +33,9 @@ const MODES = {
     accentColor: '#7abf8a',
     glowRgb: '122, 191, 138',
     amFreq: 50,
+    amDepthRatio: 0.38,
     breathingHz: 0.18,
+    breathingDepth: 0.14,
     lowpassFreq: 380,
     harmonics: [
       { freq: 50,  gain: 0.07,  type: 'triangle' },
@@ -55,7 +59,9 @@ const MODES = {
     accentColor: '#d4a84b',
     glowRgb: '212, 168, 75',
     amFreq: 120,
+    amDepthRatio: 0.35,
     breathingHz: 0.22,
+    breathingDepth: 0.12,
     lowpassFreq: 580,
     harmonics: [
       { freq: 120, gain: 0.055, type: 'sine' },
@@ -85,18 +91,13 @@ function createPurrAudio(modeKey) {
   let noiseGain = null;
   let suspendTimer = null;
 
-  // FIX: Track intentional play state and current volume target so we can
-  // correctly restore audio after lockscreen/interruption resumes.
   let isPlaying = false;
   let targetLevel = 0;
 
-  // --- Shared resume helper: called from any recovery path ---
   const tryResume = () => {
     if (!ctx || !isPlaying) return;
     if (ctx.state === 'suspended') {
       ctx.resume().then(() => {
-        // FIX: Ramp gain back to target after resuming — the previous code
-        // resumed the context but never restored the volume, causing silence.
         if (master && isPlaying) {
           const now = ctx.currentTime;
           master.gain.cancelScheduledValues(now);
@@ -115,32 +116,24 @@ function createPurrAudio(modeKey) {
     }
   };
 
-  // --- Lockscreen / tab-switch recovery ---
   const handleVisibilityChange = () => {
     if (document.visibilityState === 'visible') tryResume();
   };
-
-  // FIX: Page Lifecycle API (Chrome 68+) — fires when OS resumes a frozen page.
   const handlePageResume = () => tryResume();
 
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  // FIX: Page Lifecycle 'resume' fires on document, not window.
-  // Using window caused the handler to never fire on Android lockscreen.
   document.addEventListener('resume', handlePageResume);
 
-  // FIX: Use a 20-second buffer so the loop boundary occurs every 20 s
-  // instead of every 5 s — dramatically reducing how often any loop artifact
-  // is audible in both app mode and lockscreen.
-  //
-  // FIX: Removed the end fade-out.  The previous code faded the LAST 80 ms to
-  // silence AND faded the FIRST 80 ms from silence, creating a 160 ms dead
-  // zone of silence at every loop boundary — audible as a periodic dropout in
-  // ALL modes every 5 seconds.  Now only the start has a short fade-in (30 ms)
-  // so the initial play-start is smooth; at the loop point the buffer wraps at
-  // full volume directly into the short start fade, producing at most a 30 ms
-  // ramp rather than a 160 ms silence gap.
+  // FIX 1: Seamless noise loop — NO fade-in or fade-out on the buffer.
+  // The previous code applied a 30ms fade-in at the start of the buffer.
+  // When the buffer looped every 20s, the audio dropped to silence and ramped
+  // back up over 30ms — an audible dropout every 20 seconds.
+  // Fix: generate a clean 45-second buffer with no amplitude ramp at all.
+  // The master gain ramp on start() handles the initial play-start smoothly.
+  // The loop boundary is now a direct sample-level wrap; the lowpass filter on
+  // the noise channel smooths out any sample discontinuity so it is inaudible.
   const createPinkNoise = (audioCtx) => {
-    const bufferSize = audioCtx.sampleRate * 20;
+    const bufferSize = audioCtx.sampleRate * 45; // 45s — loop boundary every 45s
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
     let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
@@ -155,13 +148,8 @@ function createPurrAudio(modeKey) {
       data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
       b6 = white * 0.115926;
     }
-    // Short fade-in only at the start (30 ms) so first playback is smooth.
-    // No fade-out at the end — this eliminates the 160 ms silence valley that
-    // the old double-fade was creating at every loop boundary.
-    const fadeLen = Math.min(Math.floor(audioCtx.sampleRate * 0.03), bufferSize >> 1);
-    for (let i = 0; i < fadeLen; i++) {
-      data[i] *= i / fadeLen; // fade in at start only
-    }
+    // NO fade-in / fade-out — removed to eliminate the 30ms silence dip
+    // at every loop boundary. Master gain handles smooth start/stop.
     return buffer;
   };
 
@@ -172,12 +160,6 @@ function createPurrAudio(modeKey) {
 
       ctx = new AudioCtx();
 
-      // FIX: Listen for unexpected suspensions (phone calls, Siri, other apps
-      // stealing audio focus on Android/iOS).  Wait 500 ms before retrying so
-      // we don't fight the browser mid-interruption.
-      // FIX: Also set ctx.onstatechange as a fallback — older Android WebViews
-      // (Chrome < 66, some Samsung Internet versions) don't support
-      // addEventListener on AudioContext, but do honour the onstatechange property.
       const onStateChange = () => {
         if (ctx.state === 'suspended' && isPlaying) {
           setTimeout(tryResume, 500);
@@ -190,6 +172,9 @@ function createPurrAudio(modeKey) {
       master.gain.value = 0;
       master.connect(ctx.destination);
 
+      // FIX 2: Audible breathing LFO.
+      // Previous depth was 0.007 — only ±0.7% volume swing, completely inaudible.
+      // Now uses per-mode breathingDepth (0.12–0.18) for a real slow-swell effect.
       const breathingBus = ctx.createGain();
       breathingBus.gain.value = 1;
       breathingBus.connect(master);
@@ -198,17 +183,11 @@ function createPurrAudio(modeKey) {
       breathingLfo.type = 'sine';
       breathingLfo.frequency.value = mode.breathingHz;
       const breathingLfoGain = ctx.createGain();
-      breathingLfoGain.gain.value = 0.007;
+      breathingLfoGain.gain.value = mode.breathingDepth; // was 0.007 — now per-mode
       breathingLfo.connect(breathingLfoGain);
       breathingLfoGain.connect(breathingBus.gain);
       breathingLfo.start();
       oscillators.push(breathingLfo);
-
-      const amMod = ctx.createOscillator();
-      amMod.type = 'sine';
-      amMod.frequency.value = mode.amFreq;
-      amMod.start();
-      oscillators.push(amMod);
 
       const lowpass = ctx.createBiquadFilter();
       lowpass.type = 'lowpass';
@@ -216,17 +195,33 @@ function createPurrAudio(modeKey) {
       lowpass.Q.value = 1.2;
       lowpass.connect(breathingBus);
 
-      mode.harmonics.forEach(({ freq, gain, type }) => {
+      // FIX 3: Per-harmonic AM oscillators with slight frequency offsets.
+      // Previous code used a single shared amMod oscillator — all harmonics
+      // dipped in perfect synchrony, creating a harsh choppy tremolo.
+      // Now each harmonic gets its own AM oscillator detuned by ±0.8 Hz so
+      // the amplitude dips stagger across harmonics, producing a smoother
+      // natural purr texture instead of a synchronised pulse.
+      mode.harmonics.forEach(({ freq, gain, type }, i) => {
         const osc = ctx.createOscillator();
         const amp = ctx.createGain();
         osc.type = type;
         osc.frequency.value = freq;
         osc.detune.value = (Math.random() - 0.5) * 3;
         amp.gain.value = gain;
+
+        // Per-harmonic AM oscillator: base amFreq ± small offset per harmonic
+        const amOsc = ctx.createOscillator();
+        amOsc.type = 'sine';
+        // Spread AM frequencies slightly so each harmonic pulses at a different phase
+        amOsc.frequency.value = mode.amFreq + (i - Math.floor(mode.harmonics.length / 2)) * 0.6;
+        amOsc.start();
+        oscillators.push(amOsc);
+
         const modDepth = ctx.createGain();
-        modDepth.gain.value = gain * 0.55;
-        amMod.connect(modDepth);
+        modDepth.gain.value = gain * mode.amDepthRatio;
+        amOsc.connect(modDepth);
         modDepth.connect(amp.gain);
+
         osc.connect(amp);
         amp.connect(lowpass);
         osc.start();
@@ -248,10 +243,7 @@ function createPurrAudio(modeKey) {
       noiseGain.connect(breathingBus);
       noiseSource.start();
 
-      // FIX: iOS keep-alive — a near-silent oscillator (0.00001 gain, inaudible)
-      // keeps the AudioContext's audio session active through the lock screen.
-      // Without this, iOS releases the session when the screen locks and all
-      // Web Audio nodes go silent even after the context is resumed.
+      // iOS keep-alive: near-silent oscillator holds audio session through lock screen
       const keepAliveOsc = ctx.createOscillator();
       const keepAliveGain = ctx.createGain();
       keepAliveGain.gain.value = 0.00001;
@@ -275,8 +267,6 @@ function createPurrAudio(modeKey) {
       const ok = await setup();
       if (!ok || !ctx || !master) return;
 
-      // FIX: Set intent flags before ramping so that any statechange event
-      // fired during startup correctly sees isPlaying = true.
       isPlaying = true;
       targetLevel = level;
 
@@ -289,7 +279,6 @@ function createPurrAudio(modeKey) {
         noiseGain.gain.linearRampToValueAtTime(level * mode.noiseRatio, now + 2);
       }
 
-      // --- Media Session API: tell the OS this is a media app ---
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: 'Sleep Companion',
@@ -303,8 +292,6 @@ function createPurrAudio(modeKey) {
     },
 
     stop() {
-      // FIX: Clear intent flags first so the statechange / visibilitychange
-      // handlers do not try to resume a context the user intentionally stopped.
       isPlaying = false;
       targetLevel = 0;
 
@@ -319,8 +306,6 @@ function createPurrAudio(modeKey) {
 
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
-        // FIX: Only suspend if the user hasn't restarted playback in the
-        // meantime (quick tap-stop-tap scenario).
         if (ctx && ctx.state === 'running' && !isPlaying) {
           ctx.suspend().catch(() => {});
         }
@@ -453,9 +438,6 @@ export default function SleepCompanionNew() {
   const [audioHint, setAudioHint] = useState('Tap the cat to start purring.');
   const audioRef = useRef(null);
   const volumeRef = useRef(volume);
-
-  // FIX: Track whether audio was playing at the moment a mode switch is
-  // triggered so the modeKey effect can auto-restart the new engine.
   const wasPlayingOnSwitchRef = useRef(false);
 
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -463,7 +445,6 @@ export default function SleepCompanionNew() {
 
   const mode = MODES[modeKey];
 
-  // Keep volumeRef in sync so setTimeout callbacks read the latest volume.
   useEffect(() => { volumeRef.current = volume; }, [volume]);
 
   useEffect(() => {
@@ -508,15 +489,14 @@ export default function SleepCompanionNew() {
     const engine = createPurrAudio(modeKey);
     audioRef.current = engine;
 
-    // FIX: If audio was playing when the mode switched, auto-restart on the
-    // new engine after a short crossfade gap (500 ms lets the old engine fade).
+    // FIX 4: Reduce mode-switch gap from 500ms to 200ms for a faster crossfade.
     if (wasPlayingOnSwitchRef.current) {
       wasPlayingOnSwitchRef.current = false;
       setTimeout(() => {
         engine.start(volumeRef.current);
         setIsPurring(true);
         setAudioHint('Purring... Tap to stop.');
-      }, 500);
+      }, 200);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeKey]);
@@ -552,8 +532,6 @@ export default function SleepCompanionNew() {
 
   const switchMode = (key) => {
     if (key === modeKey) return;
-    // FIX: Record play state before stopping so the modeKey effect can
-    // resume on the new engine automatically (seamless mode crossfade).
     wasPlayingOnSwitchRef.current = isPurring;
     if (isPurring) stopPurr();
     setModeKey(key);
